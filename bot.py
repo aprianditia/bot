@@ -2,6 +2,7 @@ import requests
 import asyncio
 from telegram import Bot
 from emoji import emojize
+import time
 
 bot_token = "7165336794:AAFn0S4mbtHGBh4nkZb1zxllJWQtBg6QWG0"
 chat_id = "-1001625368792"
@@ -31,13 +32,14 @@ def get_crypto_price(pair):
         return None
 
 # Fungsi untuk memonitor kenaikan atau penurunan harga
-async def monitor_price_change(threshold_percent=5, interval=5):
+async def monitor_price_change(threshold_percent=5, interval=15):
     all_pairs = get_all_pairs()
     initial_prices = {}
 
-    print("Bot is running...")  
+    print("Bot is running...")
 
     while True:
+        start_time = time.time()  # Waktu awal permintaan
         for pair in all_pairs:
             current_price = get_crypto_price(pair)
 
@@ -63,58 +65,71 @@ async def monitor_price_change(threshold_percent=5, interval=5):
                             message = f"{chart_link} Harga {change_type} {fire_emoji} <code>{percentage_change:.2f}%</code> " \
                                       f"(harga sekarang: {price_text})"
                         await send_telegram_message(message)
-                        print("Notification sent!")  
+                        print("Notification sent!")
 
                 initial_prices[pair] = current_price
 
-        await asyncio.sleep(interval)
+        elapsed_time = time.time() - start_time  # Waktu yang dibutuhkan untuk satu iterasi
+        if elapsed_time < interval:  # Menunggu sisa waktu interval
+            await asyncio.sleep(interval - elapsed_time)
 
-# Fungsi untuk memonitor kenaikan volume
-async def monitor_volume_increase(threshold_volume=3000, interval=30):
-    print("Monitoring volume...")
-
-    while True:
-        try:
-            api_url = 'https://indodax.com/api/tickers'
-            response = requests.get(api_url)
-            data = response.json()
-
-            for pair_data in data.values():
-                volume = float(pair_data.get('vol_idr', 0))
-                pair = pair_data.get('pair')
-
-                if volume >= threshold_volume:
-                    message = f"Volume untuk pasangan {pair} telah naik secara drastis menjadi {volume} IDR dalam 5 menit terakhir!"
-                    await send_telegram_message(message)
-                    print("Volume notification sent!")
-
-            await asyncio.sleep(interval)
-        except Exception as e:
-            print(f"An error occurred while monitoring volume: {str(e)}")
-
-# Fungsi untuk melakukan koneksi ulang
+# Fungsi untuk melakukan koneksi ulang ke API Indodax
 async def reconnect():
     print("Connection lost. Reconnecting...")
     while True:
         try:
             await asyncio.sleep(10)  # Delay 10 detik sebelum mencoba kembali
+            print("Checking connection...")
             response = requests.get("https://indodax.com/api/pairs")
             if response.status_code == 200:
-                print("Reconnected successfully!")
+                print("Connection: OK")
                 return True
+            else:
+                print("Connection: Interrupted. Reconnecting...")
         except Exception as e:
             print(f"Reconnection failed: {str(e)}")
             continue
 
-async def main():
+# Fungsi untuk mengecek koneksi ke API Indodax setiap 15 menit
+async def check_api_connection():
     while True:
+        await asyncio.sleep(900)  # 900 detik = 15 menit
         try:
-            task1 = asyncio.create_task(monitor_price_change())
-            task2 = asyncio.create_task(monitor_volume_increase())
-            await asyncio.gather(task1, task2)
+            response = requests.get("https://indodax.com/api/pairs")
+            if response.status_code != 200:
+                print("API connection lost. Reconnecting...")
+                await reconnect()
+                # Mulai kembali pemantauan harga setelah berhasil melakukan koneksi ulang
+                await monitor_price_change()
         except Exception as e:
-            print(f"An error occurred: {str(e)}")
-            await reconnect()
+            print(f"Error checking API connection: {str(e)}")
+
+# Fungsi untuk mengecek koneksi bot setiap 15 menit
+async def check_bot_connection():
+    while True:
+        await asyncio.sleep(900)  # 900 detik = 15 menit
+        try:
+            response = requests.get("https://api.telegram.org")
+            if response.status_code != 200:
+                print("Bot connection lost. Reconnecting...")
+                await reconnect()
+                # Mulai kembali pemantauan harga setelah berhasil melakukan koneksi ulang
+                await monitor_price_change()
+        except Exception as e:
+            print(f"Error checking bot connection: {str(e)}")
+
+async def main():
+    try:
+        while True:
+            task1 = asyncio.create_task(monitor_price_change())
+            task2 = asyncio.create_task(check_api_connection())
+            task3 = asyncio.create_task(check_bot_connection())
+            await task1
+            await task2
+            await task3
+    except Exception as e:
+        print(f"An error occurred: {str(e)}")
+        await reconnect()
 
 if __name__ == '__main__':
     asyncio.run(main())
