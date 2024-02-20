@@ -123,10 +123,12 @@ async def check_connection():
 
 async def main():
     try:
+        threshold_percent = float(input("Masukkan persentase perubahan harga yang diinginkan: "))
+        interval = float(input("Masukkan waktu interval pemantauan (detik): "))
         while True:
             connection_ok = await check_connection()
             if connection_ok:
-                await monitor_price_change()
+                await monitor_price_change(threshold_percent, interval)
             else:
                 print("Connection failed. Retrying...")
     except Exception as e:
