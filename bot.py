@@ -11,6 +11,7 @@ chat_id = "-1001625368792"
 async def send_telegram_message(message):
     bot = Bot(token=bot_token)
     await bot.send_message(chat_id=chat_id, text=message, parse_mode="HTML")
+    print("Sending Notification")
 
 # Fungsi untuk mendapatkan semua pasangan kripto di Indodax
 def get_all_pairs():
@@ -32,16 +33,21 @@ def get_crypto_price(pair):
         return None
 
 # Fungsi untuk memonitor kenaikan atau penurunan harga
-async def monitor_price_change(threshold_percent=5, interval=15):
+async def monitor_price_change(threshold_percent=5, interval=5, blacklist_price=15):
     all_pairs = get_all_pairs()
     initial_prices = {}
 
-    print("Bot is running...")
+    print("Initiating Bot...")
+    print("Bot is running... Monitoring Price change..")
 
     while True:
         start_time = time.time()  # Waktu awal permintaan
         for pair in all_pairs:
             current_price = get_crypto_price(pair)
+
+            # Skip pair dengan harga di bawah threshold untuk IDR
+            if pair.endswith('idr') and current_price is not None and current_price < blacklist_price:
+                continue
 
             if current_price is not None:
                 initial_price = initial_prices.get(pair, current_price)
@@ -53,19 +59,18 @@ async def monitor_price_change(threshold_percent=5, interval=15):
                     if percentage_change >= threshold_percent:
                         chart_link = f'<a href="https://indodax.com/chart/{pair.upper()}">{pair.upper()}</a>'
                         if pair.endswith('usdt'):
-                            price_text = f"USD ${current_price:,.2f}"
+                            price_text = f"USD ${current_price:.8f}" if current_price >= 0.01 else f"USD ${current_price:.8e}"
                         else:
                             price_text = f"Rp.{current_price:,.0f}"
                         if change_type == 'naik':
-                            rocket_emoji = emojize(":rocket:")
-                            message = f"{chart_link} Harga {change_type} {rocket_emoji} <code>{percentage_change:.2f}%</code> " \
+                            emoji = emojize(":rocket:")
+                            message = f"{chart_link} Harga {change_type} {emoji} <code>+{percentage_change:.2f}%</code> " \
                                       f"(harga sekarang: {price_text})"
                         else:
-                            fire_emoji = emojize(":fire:")
-                            message = f"{chart_link} Harga {change_type} {fire_emoji} <code>{percentage_change:.2f}%</code> " \
+                            emoji = emojize(":fire:")
+                            message = f"{chart_link} Harga {change_type} {emoji} <code>-{percentage_change:.2f}%</code> " \
                                       f"(harga sekarang: {price_text})"
                         await send_telegram_message(message)
-                        print("Notification sent!")
 
                 initial_prices[pair] = current_price
 
@@ -74,62 +79,58 @@ async def monitor_price_change(threshold_percent=5, interval=15):
             await asyncio.sleep(interval - elapsed_time)
 
 # Fungsi untuk melakukan koneksi ulang ke API Indodax
-async def reconnect():
-    print("Connection lost. Reconnecting...")
+async def reconnect_indodax():
+    print("Checking connection to Indodax API...")
     while True:
         try:
-            await asyncio.sleep(10)  # Delay 10 detik sebelum mencoba kembali
-            print("Checking connection...")
+            start_time = time.time()
             response = requests.get("https://indodax.com/api/pairs")
+            latency = time.time() - start_time
             if response.status_code == 200:
-                print("Connection: OK")
+                print(f"Indodax API > OK ({latency} seconds)")
                 return True
             else:
-                print("Connection: Interrupted. Reconnecting...")
+                print(f"Indodax API > Fail ({latency} seconds)")
         except Exception as e:
-            print(f"Reconnection failed: {str(e)}")
-            continue
+            print(f"Error checking connection to Indodax API: {str(e)}")
+        await asyncio.sleep(10)  # Delay 10 detik sebelum mencoba kembali
 
-# Fungsi untuk mengecek koneksi ke API Indodax setiap 15 menit
-async def check_api_connection():
-    while True:
-        await asyncio.sleep(900)  # 900 detik = 15 menit
-        try:
-            response = requests.get("https://indodax.com/api/pairs")
-            if response.status_code != 200:
-                print("API connection lost. Reconnecting...")
-                await reconnect()
-                # Mulai kembali pemantauan harga setelah berhasil melakukan koneksi ulang
-                await monitor_price_change()
-        except Exception as e:
-            print(f"Error checking API connection: {str(e)}")
-
-# Fungsi untuk mengecek koneksi bot setiap 15 menit
+# Fungsi untuk mengecek koneksi bot
 async def check_bot_connection():
+    print("Checking connection to Telegram Bot...")
     while True:
-        await asyncio.sleep(900)  # 900 detik = 15 menit
         try:
+            start_time = time.time()
             response = requests.get("https://api.telegram.org")
-            if response.status_code != 200:
-                print("Bot connection lost. Reconnecting...")
-                await reconnect()
-                # Mulai kembali pemantauan harga setelah berhasil melakukan koneksi ulang
-                await monitor_price_change()
+            latency = time.time() - start_time
+            if response.status_code == 200:
+                print(f"Telegram Bot > OK ({latency} seconds)")
+                return True
+            else:
+                print(f"Telegram Bot > Fail ({latency} seconds)")
         except Exception as e:
             print(f"Error checking bot connection: {str(e)}")
+        await asyncio.sleep(10)  # Delay 10 detik sebelum mencoba kembali
+
+# Fungsi untuk mengecek koneksi secara keseluruhan
+async def check_connection():
+    indodax_ok = await reconnect_indodax()
+    bot_ok = await check_bot_connection()
+    if indodax_ok and bot_ok:
+        return True
+    else:
+        return False
 
 async def main():
     try:
         while True:
-            task1 = asyncio.create_task(monitor_price_change())
-            task2 = asyncio.create_task(check_api_connection())
-            task3 = asyncio.create_task(check_bot_connection())
-            await task1
-            await task2
-            await task3
+            connection_ok = await check_connection()
+            if connection_ok:
+                await monitor_price_change()
+            else:
+                print("Connection failed. Retrying...")
     except Exception as e:
         print(f"An error occurred: {str(e)}")
-        await reconnect()
 
 if __name__ == '__main__':
     asyncio.run(main())
